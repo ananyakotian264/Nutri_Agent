@@ -17,7 +17,7 @@ services:
       - key: USDA_API_KEY
         sync: false
       - key: CORS_ORIGINS
-        value: http://localhost:5173,https://nutri-agent-frontend.onrender.com
+        value: http://localhost:5173,https://nutri-agent-frontend-cbmz.onrender.com
       - key: LOG_LEVEL
         value: INFO
 
@@ -33,4 +33,4 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        value: https://nutri-agent-backend.onrender.com
+        value: https://nutri-agent-backend-cbmz.onrender.com

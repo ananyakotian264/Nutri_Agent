@@ -81,7 +81,7 @@ allowed_origins = [
     origin.strip()
     for origin in os.getenv(
         "CORS_ORIGINS",
-        "http://localhost:5173,https://nutri-agent-mu.vercel.app",
+        "http://localhost:5173,https://nutri-agent-frontend-cbmz.onrender.com",
     ).split(",")
     if origin.strip()
 ]

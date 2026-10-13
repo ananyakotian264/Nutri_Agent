@@ -1,7 +1,7 @@
 const configuredBase = import.meta.env.VITE_API_URL?.trim();
 const BASE_URL = (configuredBase || (import.meta.env.DEV
   ? "http://localhost:8000"
-  : "https://nutri-agent-backend.onrender.com")).replace(/\/$/, "");
+  : "https://nutri-agent-backend-cbmz.onrender.com")).replace(/\/$/, "");
 const TOKEN_KEY = "nutri_access_token";
 
 let accessToken = localStorage.getItem(TOKEN_KEY);
