@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: nutri-agent-backend
+    runtime: python
+    plan: starter
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    disk:
+      name: nutri-agent-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
+      - key: USDA_API_KEY
+        sync: false
+      - key: NUTRI_DATABASE_PATH
+        value: /var/data/nutri_agent.db
+      - key: CORS_ORIGINS
+        value: http://localhost:5173,https://nutri-agent-mu.vercel.app
+      - key: LOG_LEVEL
+        value: INFO

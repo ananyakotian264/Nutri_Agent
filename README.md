@@ -42,6 +42,10 @@ npm run dev
 
 The frontend runs at `http://localhost:5173`; the API runs at `http://localhost:8000`. Set `VITE_API_URL` in `frontend/.env.local` to point the client at a different API URL. Production defaults to the current Render API URL.
 
+## Deployment
+
+The repository includes `render.yaml` for the FastAPI backend and `frontend/vercel.json` for the Vite frontend. Connect the repository to Render as a Blueprint and to Vercel with the project root set to `frontend`. Set `GROQ_API_KEY` in Render's secret environment variables. USDA lookup is optional. The Render Blueprint uses a persistent 1 GB disk for SQLite. Render's free web services do not support persistent disks, so use the configured paid disk-backed service for accounts and nutrition data that should survive restarts. The local database and `.env.local` must not be uploaded. If Vercel assigns a different frontend domain, update Render's `CORS_ORIGINS` to include that exact origin.
+
 ## Configuration
 
 Copy `backend/.env.example` to `backend/.env`. Keep provider keys in the backend environment only.
