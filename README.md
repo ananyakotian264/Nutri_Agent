@@ -44,7 +44,7 @@ The frontend runs at `http://localhost:5173`; the API runs at `http://localhost:
 
 ## Deployment
 
-The repository includes `render.yaml` for the FastAPI backend and `frontend/vercel.json` for the Vite frontend. Connect the repository to Render as a Blueprint and to Vercel with the project root set to `frontend`. Set `GROQ_API_KEY` in Render's secret environment variables. USDA lookup is optional. The Render Blueprint uses a persistent 1 GB disk for SQLite. Render's free web services do not support persistent disks, so use the configured paid disk-backed service for accounts and nutrition data that should survive restarts. The local database and `.env.local` must not be uploaded. If Vercel assigns a different frontend domain, update Render's `CORS_ORIGINS` to include that exact origin.
+The root `render.yaml` Blueprint deploys both the FastAPI API and Vite frontend on Render; Vercel is not required. In Render, create a Blueprint from this repository and set `GROQ_API_KEY` when prompted. USDA lookup is optional. The frontend is a free Render Static Site; the API uses Render Free. The API sleeps after 15 minutes without traffic, so its first request after idle can take about a minute to wake. Its filesystem is temporary: SQLite accounts, profiles, meals, and prediction history can be lost after a restart, redeploy, or spin-down. This setup is suitable for a free demo, not durable personal data storage. The local database and `.env.local` must not be uploaded. If Render assigns a different frontend hostname, update the API's `CORS_ORIGINS` to include that exact origin.
 
 ## Configuration
 
