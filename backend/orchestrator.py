@@ -231,6 +231,7 @@ class Agent:
         predictions = []
         has_grounded_usda_record = False
         usda_reference = None
+        usda_lookup_result = None
         require_meal_output = False
 
         for step in range(MAX_AGENT_STEPS):
@@ -300,6 +301,8 @@ class Agent:
                     else:
                         if usda_reference:
                             prediction["reference"] = usda_reference
+                        if isinstance(usda_lookup_result, dict) and usda_lookup_result.get("error"):
+                            prediction["lookup_error"] = usda_lookup_result["error"]
                         if persist:
                             observation = await self.bridge.call_tool(call.function.name, args)
                             if observation.get("status") == "logged":
@@ -311,9 +314,11 @@ class Agent:
                 else:
                     observation = await self.bridge.call_tool(call.function.name, args)
 
-                if call.function.name == "search_usda_food" and observation.get("found"):
-                    has_grounded_usda_record = True
-                    usda_reference = observation
+                if call.function.name == "search_usda_food":
+                    usda_lookup_result = observation
+                    if observation.get("found"):
+                        has_grounded_usda_record = True
+                        usda_reference = observation
                 if call.function.name == "search_usda_food" and not predictions:
                     require_meal_output = True
                 trace.append({"type": "observation", "tool": call.function.name, "result": observation})

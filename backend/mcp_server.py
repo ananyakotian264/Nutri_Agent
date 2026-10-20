@@ -40,7 +40,7 @@ logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("mcp_server")
 
-USDA_API_KEY = os.getenv("USDA_API_KEY")
+USDA_API_KEY = os.getenv("USDA_API_KEY") or "DEMO_KEY"
 USDA_SEARCH_URL = "https://api.nal.usda.gov/fdc/v1/foods/search"
 
 db.init_db()
@@ -71,21 +71,33 @@ def search_usda_food(query: str) -> dict:
         "calories_per_100g", "protein_g_per_100g", "carbs_g_per_100g",
         "fat_g_per_100g", "fiber_g_per_100g", and a heuristic match score.
     """
-    if not USDA_API_KEY or USDA_API_KEY == "your_usda_key_here":
-        return {"found": False, "error": "USDA_API_KEY is not configured on the server."}
+    api_key = USDA_API_KEY if USDA_API_KEY != "your_usda_key_here" else "DEMO_KEY"
 
     try:
         resp = httpx.get(
             USDA_SEARCH_URL,
-            params={"query": query, "api_key": USDA_API_KEY, "pageSize": 25, "dataType": "Foundation,SR Legacy"},
+            params=[
+                ("query", query), ("api_key", api_key), ("pageSize", 25),
+                ("dataType", "Foundation"), ("dataType", "SR Legacy"),
+            ],
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
-    except httpx.HTTPError as e:
+    except httpx.HTTPStatusError as e:
+        status_code = e.response.status_code
+        if status_code in {401, 403}:
+            message = "USDA rejected the API key. Add a valid USDA_API_KEY in Render settings."
+        elif status_code == 429:
+            message = "USDA rate limit reached. Configure your own USDA_API_KEY in Render settings."
+        else:
+            message = f"USDA lookup returned HTTP {status_code}."
         # HTTP exception strings may include the API key in the request URL.
+        log.warning("USDA request failed with HTTP %s", status_code)
+        return {"found": False, "error": message}
+    except httpx.HTTPError as e:
         log.warning("USDA request failed (%s)", type(e).__name__)
-        return {"found": False, "error": "USDA lookup failed. Try again later."}
+        return {"found": False, "error": "USDA could not be reached. Try again shortly."}
 
     foods = data.get("foods", [])
     if not foods:

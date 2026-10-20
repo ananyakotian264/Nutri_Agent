@@ -41,7 +41,7 @@ function QualityOverview({ metrics }) {
 }
 
 function NutritionValues({ prediction }) {
-  if (!prediction.reference_verified) return <div className="audit-unverified"><strong>AI estimate · not independently verified</strong><span>No sufficiently relevant USDA record and complete portion data were available.</span></div>;
+  if (!prediction.reference_verified) return <div className="audit-unverified"><strong>AI estimate · not independently verified</strong><span>{prediction.lookup_error || "No sufficiently relevant USDA record and complete portion data were available."}</span></div>;
   return <div className="compared-values">
     <div className="compared-row compared-heading"><span>Nutrient</span><span>Calculated serving value</span><span>Source</span><span>Portion</span></div>
     {nutrients.map(([key, label, unit]) => <div className="compared-row" key={key}>

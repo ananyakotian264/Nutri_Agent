@@ -54,7 +54,7 @@ Copy `backend/.env.example` to `backend/.env`. Keep provider keys in the backend
 | --- | --- |
 | `GROQ_API_KEY` | Enables model predictions and AI food logging. Without it, sign-in, profiles, and manual logging can still run. |
 | `GROQ_MODEL` | Optional Groq model ID; defaults to `openai/gpt-oss-20b`. If a configured model is unavailable, the backend retries with that default. |
-| `USDA_API_KEY` | Optional USDA FoodData Central search. Without it, the agent may provide a clearly labeled estimate. |
+| `USDA_API_KEY` | USDA FoodData Central API key. If unset, the backend uses USDA's public `DEMO_KEY`, which is heavily rate limited; add your own free key in Render for reliable lookups. |
 | `CORS_ORIGINS` | Comma-separated exact browser origins allowed to call the API. |
 | `NUTRI_DATABASE_PATH` | Optional SQLite file path. Defaults to `backend/nutri_agent.db`. |
 | `LOG_LEVEL` | Optional server log level; defaults to `INFO`. |

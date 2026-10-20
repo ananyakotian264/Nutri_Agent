@@ -160,6 +160,7 @@ def init_db():
             matched_food TEXT,
             match_score REAL,
             match_strength TEXT,
+            lookup_error TEXT,
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
             FOREIGN KEY (meal_id) REFERENCES meals (id) ON DELETE CASCADE
         )"""
@@ -169,6 +170,7 @@ def init_db():
         ("matched_food", "TEXT"),
         ("match_score", "REAL"),
         ("match_strength", "TEXT"),
+        ("lookup_error", "TEXT"),
     ):
         if column not in audit_columns:
             conn.execute(f"ALTER TABLE automatic_prediction_audits ADD COLUMN {column} {declaration}")
@@ -472,8 +474,8 @@ def save_automatic_prediction_audits(user_id: int, description: str, model: str,
                     predicted_fiber_g, portion_grams, reference_food, reference_fdc_id,
                     reference_calories_per_100g, reference_protein_g_per_100g,
                     reference_carbs_g_per_100g, reference_fat_g_per_100g, reference_fiber_g_per_100g,
-                    matched_food, match_score, match_strength
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    matched_food, match_score, match_strength, lookup_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(meal_id) DO UPDATE SET
                     created_at=excluded.created_at, model=excluded.model, description=excluded.description,
                     source=excluded.source, predicted_food=excluded.predicted_food,
@@ -488,7 +490,7 @@ def save_automatic_prediction_audits(user_id: int, description: str, model: str,
                     reference_fat_g_per_100g=excluded.reference_fat_g_per_100g,
                     reference_fiber_g_per_100g=excluded.reference_fiber_g_per_100g,
                     matched_food=excluded.matched_food, match_score=excluded.match_score,
-                    match_strength=excluded.match_strength""",
+                    match_strength=excluded.match_strength, lookup_error=excluded.lookup_error""",
                 (user_id, meal_id, now, model, description, prediction.get("source", "estimated"),
                  prediction["food_name"], prediction["calories"], prediction["protein_g"],
                  prediction["carbs_g"], prediction["fat_g"], prediction["fiber_g"],
@@ -498,7 +500,8 @@ def save_automatic_prediction_audits(user_id: int, description: str, model: str,
                  *(values[key] if verified else None for key in ("calories", "protein_g", "carbs_g", "fat_g", "fiber_g")),
                  reference.get("food_name") if reference.get("found") else None,
                  reference.get("match_score") if reference.get("found") else None,
-                 reference.get("match_strength") if reference.get("found") else None),
+                 reference.get("match_strength") if reference.get("found") else None,
+                 str(prediction.get("lookup_error") or "")[:200] or None),
             )
         conn.commit()
     except Exception:
