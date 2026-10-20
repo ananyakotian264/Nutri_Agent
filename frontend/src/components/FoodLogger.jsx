@@ -61,8 +61,8 @@ export default function FoodLogger({ onResult }) {
       <div className="textarea-footer"><span>Food estimates can vary by recipe and portion.</span><span>{message.length}/2000</span></div>
       <button className="primary-button logger-submit" type="submit" disabled={loading || !message.trim()}>{loading ? <><span className="button-spinner" aria-hidden="true" />Working on it…</> : "Add to my food log"}</button>
     </form> : <form onSubmit={submitManual} className="manual-form">
-      <label className="field-label" htmlFor="manual-food">Food or meal name</label>
-      <input className="field-input" id="manual-food" type="text" maxLength="120" placeholder="e.g. Homemade vegetable soup" value={manual.food_name} onChange={(event) => setManual({ ...manual, food_name: event.target.value })} required />
+      <label className="field-label" htmlFor="manual-food">Food, meal, and portion</label>
+      <input className="field-input" id="manual-food" type="text" maxLength="120" placeholder="e.g. Homemade vegetable soup, 350 ml" value={manual.food_name} onChange={(event) => setManual({ ...manual, food_name: event.target.value })} required />
       <div className="manual-grid">{manualFields.map(([field, label, unit]) => <label key={field} className="field-label">{label} <span>({unit})</span><input className="field-input" type="number" min="0" max={field === "calories" ? "100000" : "10000"} step="0.1" value={manual[field]} onChange={(event) => setManual({ ...manual, [field]: event.target.value })} required /></label>)}</div>
       <button className="primary-button logger-submit" type="submit" disabled={loading}>{loading ? "Saving…" : "Save nutrition values"}</button>
     </form>}

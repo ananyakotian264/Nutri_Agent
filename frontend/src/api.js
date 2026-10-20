@@ -30,9 +30,6 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    if (response.status === 404 && path === "/predict-food") {
-      throw new Error("The prediction API is not deployed on the backend yet. Deploy the updated backend and try again.");
-    }
     if (response.status === 401 && accessToken && !["/login", "/signup"].includes(path)) {
       setAccessToken(null);
       window.dispatchEvent(new Event("nutri-session-expired"));
@@ -52,13 +49,8 @@ export const api = {
   getHealth: () => request("/health"),
   saveProfile: (data) => request("/profile", { method: "POST", body: JSON.stringify(data) }),
   logFood: (message) => request("/log-food", { method: "POST", body: JSON.stringify({ message }) }),
-  predictFood: (message) => request("/predict-food", { method: "POST", body: JSON.stringify({ message }) }),
   logManual: (data) => request("/log-manual", { method: "POST", body: JSON.stringify(data) }),
   deleteMeal: (id) => request(`/meals/${id}`, { method: "DELETE" }),
   getModelPredictions: () => request("/model-predictions"),
-  saveModelPredictionActual: (id, data) => request(`/model-predictions/${id}/actual`, { method: "PUT", body: JSON.stringify(data) }),
   deleteModelPrediction: (id) => request(`/model-predictions/${id}`, { method: "DELETE" }),
-  getPredictionChecks: () => request("/prediction-checks"),
-  savePredictionCheck: (data) => request("/prediction-checks", { method: "POST", body: JSON.stringify(data) }),
-  deletePredictionCheck: (id) => request(`/prediction-checks/${id}`, { method: "DELETE" }),
 };

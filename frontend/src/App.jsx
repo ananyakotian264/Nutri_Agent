@@ -207,7 +207,7 @@ export default function App() {
     <div className="app-shell">
       <header className="app-header">
         <a className="brand-lockup" href="#main" aria-label="Nutri-Agent home" onClick={(event) => { event.preventDefault(); setActiveView("dashboard"); }}><BrandMark /><span>nutri<span className="brand-light">agent</span></span></a>
-        <nav className="app-nav" aria-label="Main navigation"><button className={activeView === "dashboard" ? "active" : ""} onClick={() => setActiveView("dashboard")}>My nutrition</button><button className={activeView === "prediction" ? "active" : ""} onClick={() => setActiveView("prediction")}>Model prediction</button></nav>
+        <nav className="app-nav" aria-label="Main navigation"><button className={activeView === "dashboard" ? "active" : ""} onClick={() => setActiveView("dashboard")}>My nutrition</button><button className={activeView === "prediction" ? "active" : ""} onClick={() => setActiveView("prediction")}>Data quality</button></nav>
         <div className="header-right"><span className="user-chip"><span className="user-avatar">{username.slice(0, 1).toUpperCase()}</span><span>{username}</span></span><button className="quiet-button" onClick={handleLogout}>Sign out</button></div>
       </header>
 
