@@ -6,54 +6,93 @@ import db
 from metrics import calculate_metrics
 
 
-class ModelPredictionStorageTests(unittest.TestCase):
+class AutomaticPredictionAuditTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
         self.old_db_path = db.DB_PATH
-        db.DB_PATH = Path(self.temp_dir.name) / "predictions.sqlite3"
+        db.DB_PATH = Path(self.temp_dir.name) / "audits.sqlite3"
         db.init_db()
-        self.owner = db.create_user("prediction.owner", "hash")
-        self.other = db.create_user("prediction.other", "hash")
+        self.owner = db.create_user("audit.owner", "hash")
+        self.other = db.create_user("audit.other", "hash")
 
     def tearDown(self):
         db.DB_PATH = self.old_db_path
         self.temp_dir.cleanup()
 
-    def test_model_results_persist_actual_values_and_are_account_scoped(self):
-        prediction = {
-            "food_name": "Four large eggs",
-            "calories": 286,
-            "protein_g": 25,
-            "carbs_g": 1,
-            "fat_g": 19,
-            "fiber_g": 0,
-            "source": "usda",
+    @staticmethod
+    def prediction(source="usda", portion=150, reference=True):
+        item = {
+            "food_name": "Orange",
+            "calories": 93,
+            "protein_g": 1.8,
+            "carbs_g": 23.1,
+            "fat_g": 0.2,
+            "fiber_g": 4.7,
+            "source": source,
+            "portion_grams": portion,
         }
-        saved = db.save_model_predictions(self.owner, "four large eggs", "test-model", [prediction])
-        self.assertEqual(len(saved), 1)
-        prediction_id = saved[0]["id"]
-        self.assertIsNone(saved[0]["actual_food"])
-        self.assertEqual(db.get_model_predictions(self.owner)[0]["predicted_calories"], 286)
-        self.assertEqual(db.get_model_predictions(self.other), [])
-        self.assertEqual(calculate_metrics(db.get_metric_examples(self.owner))["classification"]["sample_count"], 0)
+        if reference:
+            item["reference"] = {
+                "found": True,
+                "food_name": "Oranges, raw",
+                "fdc_id": 123,
+                "calories_per_100g": 62,
+                "protein_g_per_100g": 1.2,
+                "carbs_g_per_100g": 15.4,
+                "fat_g_per_100g": 0.2,
+                "fiber_g_per_100g": 3.1,
+                "match_score": 89,
+                "match_strength": "high",
+            }
+        return item
 
-        actual = {
-            "actual_food": "Egg, whole, cooked",
-            "actual_calories": 294,
-            "actual_protein_g": 25,
-            "actual_carbs_g": 1,
-            "actual_fat_g": 20,
-            "actual_fiber_g": 0,
-        }
-        self.assertFalse(db.update_model_prediction_actual(self.other, prediction_id, actual))
-        self.assertTrue(db.update_model_prediction_actual(self.owner, prediction_id, actual))
-        metrics = calculate_metrics(db.get_metric_examples(self.owner))
-        self.assertEqual(metrics["classification"]["sample_count"], 1)
-        self.assertAlmostEqual(metrics["nutrition"]["calories"]["mae"], 8)
+    def test_only_complete_usda_reference_is_scored_automatically(self):
+        meal_id = db.insert_meal(self.owner, "Orange", 93, 1.8, 23.1, 0.2, 4.7, source="usda")
+        db.save_automatic_prediction_audits(self.owner, "one orange", "test-model", [
+            {**self.prediction(), "meal_id": meal_id},
+        ])
 
-        self.assertFalse(db.delete_model_prediction(self.other, prediction_id))
-        self.assertTrue(db.delete_model_prediction(self.owner, prediction_id))
-        self.assertEqual(db.get_model_predictions(self.owner), [])
+        rows = db.get_automatic_prediction_audits(self.owner)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["reference_verified"])
+        self.assertEqual(rows[0]["reference_calories"], 93)
+        self.assertAlmostEqual(rows[0]["reference_carbs_g"], 23.1)
+        metrics = calculate_metrics(rows)
+        self.assertEqual(metrics["total_count"], 1)
+        self.assertEqual(metrics["reference_coverage_percent"], 100)
+        self.assertEqual(metrics["match_strength_counts"]["high"], 1)
+        self.assertEqual(metrics["average_match_score"], 89)
+        self.assertEqual(db.get_automatic_prediction_audits(self.other), [])
+
+    def test_estimates_and_missing_portion_remain_unscored(self):
+        meal_ids = [
+            db.insert_meal(self.owner, "Estimated meal", 100, 5, 10, 2, 1, source="estimated"),
+            db.insert_meal(self.owner, "No weight", 100, 5, 10, 2, 1, source="usda"),
+        ]
+        db.save_automatic_prediction_audits(self.owner, "meal", "test-model", [
+            {**self.prediction(source="estimated"), "meal_id": meal_ids[0]},
+            {**self.prediction(portion=None), "meal_id": meal_ids[1]},
+        ])
+
+        rows = db.get_automatic_prediction_audits(self.owner)
+        metrics = calculate_metrics(rows)
+        self.assertEqual(len(rows), 2)
+        self.assertFalse(any(row["reference_verified"] for row in rows))
+        self.assertEqual(metrics["total_count"], 2)
+        self.assertEqual(metrics["reference_coverage_percent"], 100)
+        self.assertEqual(metrics["direct_source_count"], 0)
+        self.assertEqual(metrics["average_match_score"], 89)
+
+    def test_deleting_meal_cascades_its_automatic_audit(self):
+        meal_id = db.insert_meal(self.owner, "Orange", 93, 1.8, 23.1, 0.2, 4.7, source="usda")
+        db.save_automatic_prediction_audits(self.owner, "orange", "test-model", [
+            {**self.prediction(), "meal_id": meal_id},
+        ])
+        audit_id = db.get_automatic_prediction_audits(self.owner)[0]["id"]
+
+        self.assertTrue(db.delete_meal(self.owner, meal_id))
+        self.assertEqual(db.get_automatic_prediction_audits(self.owner), [])
+        self.assertFalse(db.delete_automatic_prediction_audit(self.other, audit_id))
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 import db
-from nutrition import normalize_usda_food
+from nutrition import rank_usda_foods
 
 load_dotenv()
 
@@ -69,7 +69,7 @@ def search_usda_food(query: str) -> dict:
     Returns:
         A dict with "found" (bool) and, if found, "food_name",
         "calories_per_100g", "protein_g_per_100g", "carbs_g_per_100g",
-        "fat_g_per_100g", "fiber_g_per_100g".
+        "fat_g_per_100g", "fiber_g_per_100g", and a heuristic match score.
     """
     if not USDA_API_KEY or USDA_API_KEY == "your_usda_key_here":
         return {"found": False, "error": "USDA_API_KEY is not configured on the server."}
@@ -77,7 +77,7 @@ def search_usda_food(query: str) -> dict:
     try:
         resp = httpx.get(
             USDA_SEARCH_URL,
-            params={"query": query, "api_key": USDA_API_KEY, "pageSize": 5, "dataType": "Foundation,SR Legacy"},
+            params={"query": query, "api_key": USDA_API_KEY, "pageSize": 25, "dataType": "Foundation,SR Legacy"},
             timeout=10,
         )
         resp.raise_for_status()
@@ -91,8 +91,10 @@ def search_usda_food(query: str) -> dict:
     if not foods:
         return {"found": False, "error": "No matches in USDA database."}
 
-    best = foods[0]
-    return normalize_usda_food(best)
+    ranked = rank_usda_foods(query, foods)
+    if not ranked:
+        return {"found": False, "error": "USDA matches did not provide usable energy data."}
+    return {**ranked[0], "search_query": query, "candidate_count": len(ranked)}
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +201,7 @@ def calculate_daily_targets(
 # also means every write shows up in the agent's visible trace.
 # ---------------------------------------------------------------------------
 @mcp.tool()
-def log_meal(user_id: int, food_name: str, calories: float, protein_g: float, carbs_g: float, fat_g: float, fiber_g: float, source: str = "estimated") -> dict:
+def log_meal(user_id: int, food_name: str, calories: float, protein_g: float, carbs_g: float, fat_g: float, fiber_g: float, source: str = "estimated", portion_grams: float | None = None) -> dict:
     """
     Persist a meal to today's food log.
 
@@ -209,6 +211,7 @@ def log_meal(user_id: int, food_name: str, calories: float, protein_g: float, ca
         calories, protein_g, carbs_g, fat_g, fiber_g: nutrition for the
             ENTIRE portion eaten (not per 100g — scale USDA per-100g values
             to the actual portion size first).
+        portion_grams: estimated edible portion weight in grams, when known.
         source: "usda" if grounded in a USDA lookup, "estimated" if it's
             your best-effort estimate, "manual" if the user gave exact numbers.
     """
@@ -220,10 +223,12 @@ def log_meal(user_id: int, food_name: str, calories: float, protein_g: float, ca
     macro_values = (protein_g, carbs_g, fat_g, fiber_g)
     if any(not math.isfinite(value) or value < 0 or value > 10000 for value in macro_values):
         return {"status": "rejected", "reason": "Nutrition values must be finite, non-negative numbers."}
+    if portion_grams is not None and (not math.isfinite(portion_grams) or portion_grams <= 0 or portion_grams > 100000):
+        return {"status": "rejected", "reason": "Portion weight must be a positive, finite number of grams."}
     if source not in {"usda", "estimated", "manual"}:
         source = "estimated"
     meal_id = db.insert_meal(user_id, food_name, calories, protein_g, carbs_g, fat_g, fiber_g, source)
-    return {"meal_id": meal_id, "status": "logged"}
+    return {"meal_id": meal_id, "status": "logged", "portion_grams": portion_grams}
 
 
 @mcp.tool()

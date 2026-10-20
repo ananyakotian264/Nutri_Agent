@@ -12,7 +12,6 @@ import math
 import os
 import secrets
 import sys
-import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -167,46 +166,6 @@ class ManualLogIn(StrictModel):
         return value
 
 
-class PredictionCheckIn(StrictModel):
-    predicted_food: str = Field(min_length=1, max_length=120)
-    actual_food: str = Field(min_length=1, max_length=120)
-    predicted_calories: float = Field(ge=0, le=100000, allow_inf_nan=False)
-    predicted_protein_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-    predicted_carbs_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-    predicted_fat_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-    predicted_fiber_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-    actual_calories: float = Field(ge=0, le=100000, allow_inf_nan=False)
-    actual_protein_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-    actual_carbs_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-    actual_fat_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-    actual_fiber_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-
-    @field_validator("predicted_food", "actual_food")
-    @classmethod
-    def trim_check_food(cls, value):
-        value = value.strip()
-        if not value:
-            raise ValueError("Food labels cannot be blank")
-        return value
-
-
-class PredictionActualIn(StrictModel):
-    actual_food: str = Field(min_length=1, max_length=120)
-    actual_calories: float = Field(ge=0, le=100000, allow_inf_nan=False)
-    actual_protein_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-    actual_carbs_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-    actual_fat_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-    actual_fiber_g: float = Field(ge=0, le=10000, allow_inf_nan=False)
-
-    @field_validator("actual_food")
-    @classmethod
-    def trim_actual_food(cls, value):
-        value = value.strip()
-        if not value:
-            raise ValueError("Food name cannot be blank")
-        return value
-
-
 def token_digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
@@ -315,6 +274,9 @@ async def log_food(body: ChatIn, user_id: int = Depends(authenticated_user_id)):
         result = await asyncio.wait_for(agent.run(body.message, user_id=user_id), timeout=90)
         if not result.get("predictions"):
             raise HTTPException(status_code=502, detail="The AI did not return a nutrition estimate. Include a food name and portion, then try again.")
+        db.save_automatic_prediction_audits(
+            user_id, body.message, gateway.active_model, result["predictions"]
+        )
         totals, meals = db.get_daily_totals(user_id)
         return {"reply": result["reply"], "trace": result["trace"], "predictions": result["predictions"], "totals": totals, "meals": meals}
     except asyncio.TimeoutError:
@@ -360,51 +322,14 @@ def provider_error_message(error: Exception) -> tuple[str, int]:
     return "The AI provider could not complete this request. Check the backend AI configuration and try again.", 502
 
 
-@app.post("/predict-food")
-async def predict_food(body: ChatIn, user_id: int = Depends(authenticated_user_id)):
-    if not gateway.configured:
-        raise HTTPException(status_code=503, detail="AI prediction is not configured. Add GROQ_API_KEY to the backend environment, then restart the service.")
-    if not agent:
-        raise HTTPException(status_code=503, detail="The AI food service did not start correctly. Check the backend logs, then try again.")
-    started_at = time.perf_counter()
-    try:
-        result = await asyncio.wait_for(agent.run(body.message, user_id=user_id, persist=False), timeout=90)
-        if not result.get("predictions"):
-            raise HTTPException(status_code=502, detail="The model did not return nutrition values. Add a food and portion description, then try again.")
-        prediction_records = db.save_model_predictions(
-            user_id, body.message, gateway.active_model, result["predictions"]
-        )
-        saved_predictions = db.get_model_predictions(user_id)
-        metrics = calculate_metrics(db.get_metric_examples(user_id))
-        return {
-            "reply": result["reply"],
-            "predictions": result["predictions"],
-            "trace": result["trace"],
-            "latency_ms": round((time.perf_counter() - started_at) * 1000),
-            "model": gateway.active_model,
-            "saved_to_log": False,
-            "prediction_records": prediction_records,
-            "saved_predictions": saved_predictions,
-            "metrics": metrics,
-        }
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="The prediction timed out. Try a shorter food description.")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        log.exception("AI prediction failed (%s)", type(exc).__name__)
-        message, response_status = provider_error_message(exc)
-        raise HTTPException(status_code=response_status, detail=message)
-
-
 @app.post("/log-manual")
 async def log_manual(body: ManualLogIn, user_id: int = Depends(authenticated_user_id)):
-    db.insert_meal(
+    meal_id = db.insert_meal(
         user_id, body.food_name, body.calories, body.protein_g, body.carbs_g,
         body.fat_g, body.fiber_g, source="manual",
     )
     totals, meals = db.get_daily_totals(user_id)
-    return {"totals": totals, "meals": meals}
+    return {"meal_id": meal_id, "totals": totals, "meals": meals}
 
 
 @app.delete("/meals/{meal_id}")
@@ -415,15 +340,9 @@ async def remove_meal(meal_id: int, user_id: int = Depends(authenticated_user_id
     return {"totals": totals, "meals": meals}
 
 
-def prediction_check_payload(user_id: int) -> dict:
-    checks = db.get_prediction_checks(user_id)
-    return {"checks": checks, "metrics": calculate_metrics(checks)}
-
-
 def model_prediction_payload(user_id: int) -> dict:
-    predictions = db.get_model_predictions(user_id)
-    examples = db.get_metric_examples(user_id)
-    return {"predictions": predictions, "metrics": calculate_metrics(examples)}
+    predictions = db.get_automatic_prediction_audits(user_id)
+    return {"predictions": predictions, "metrics": calculate_metrics(predictions)}
 
 
 @app.get("/model-predictions")
@@ -431,40 +350,11 @@ async def read_model_predictions(user_id: int = Depends(authenticated_user_id)):
     return model_prediction_payload(user_id)
 
 
-@app.put("/model-predictions/{prediction_id}/actual")
-async def save_model_prediction_actual(
-    prediction_id: int,
-    body: PredictionActualIn,
-    user_id: int = Depends(authenticated_user_id),
-):
-    if not db.update_model_prediction_actual(user_id, prediction_id, body.model_dump()):
-        raise HTTPException(status_code=404, detail="That saved prediction was not found")
-    return model_prediction_payload(user_id)
-
-
 @app.delete("/model-predictions/{prediction_id}")
 async def remove_model_prediction(prediction_id: int, user_id: int = Depends(authenticated_user_id)):
-    if not db.delete_model_prediction(user_id, prediction_id):
+    if not db.delete_automatic_prediction_audit(user_id, prediction_id):
         raise HTTPException(status_code=404, detail="That saved prediction was not found")
     return model_prediction_payload(user_id)
-
-
-@app.get("/prediction-checks")
-async def read_prediction_checks(user_id: int = Depends(authenticated_user_id)):
-    return prediction_check_payload(user_id)
-
-
-@app.post("/prediction-checks", status_code=status.HTTP_201_CREATED)
-async def create_prediction_check(body: PredictionCheckIn, user_id: int = Depends(authenticated_user_id)):
-    db.add_prediction_check(user_id, body.model_dump())
-    return prediction_check_payload(user_id)
-
-
-@app.delete("/prediction-checks/{check_id}")
-async def remove_prediction_check(check_id: int, user_id: int = Depends(authenticated_user_id)):
-    if not db.delete_prediction_check(user_id, check_id):
-        raise HTTPException(status_code=404, detail="That verified comparison was not found")
-    return prediction_check_payload(user_id)
 
 
 @app.get("/summary")

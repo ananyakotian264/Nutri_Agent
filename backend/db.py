@@ -103,30 +103,6 @@ def init_db():
 
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS prediction_checks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            predicted_food TEXT NOT NULL,
-            actual_food TEXT NOT NULL,
-            predicted_calories REAL NOT NULL,
-            predicted_protein_g REAL NOT NULL,
-            predicted_carbs_g REAL NOT NULL,
-            predicted_fat_g REAL NOT NULL,
-            predicted_fiber_g REAL NOT NULL,
-            actual_calories REAL NOT NULL,
-            actual_protein_g REAL NOT NULL,
-            actual_carbs_g REAL NOT NULL,
-            actual_fat_g REAL NOT NULL,
-            actual_fiber_g REAL NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_prediction_checks_user_created ON prediction_checks(user_id, created_at)")
-
-    conn.execute(
-        """
         CREATE TABLE IF NOT EXISTS model_predictions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -146,11 +122,57 @@ def init_db():
             actual_carbs_g REAL,
             actual_fat_g REAL,
             actual_fiber_g REAL,
+            matched_meal_id INTEGER,
             FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
         """
     )
+    prediction_columns = {row["name"] for row in conn.execute("PRAGMA table_info(model_predictions)")}
+    if "matched_meal_id" not in prediction_columns:
+        conn.execute("ALTER TABLE model_predictions ADD COLUMN matched_meal_id INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_model_predictions_user_created ON model_predictions(user_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_model_predictions_matched_meal ON model_predictions(user_id, matched_meal_id)")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_model_predictions_one_per_meal ON model_predictions(user_id, matched_meal_id) WHERE matched_meal_id IS NOT NULL")
+
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS automatic_prediction_audits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            meal_id INTEGER NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            model TEXT NOT NULL,
+            description TEXT NOT NULL,
+            source TEXT NOT NULL,
+            predicted_food TEXT NOT NULL,
+            predicted_calories REAL NOT NULL,
+            predicted_protein_g REAL NOT NULL,
+            predicted_carbs_g REAL NOT NULL,
+            predicted_fat_g REAL NOT NULL,
+            predicted_fiber_g REAL NOT NULL,
+            portion_grams REAL,
+            reference_food TEXT,
+            reference_fdc_id TEXT,
+            reference_calories_per_100g REAL,
+            reference_protein_g_per_100g REAL,
+            reference_carbs_g_per_100g REAL,
+            reference_fat_g_per_100g REAL,
+            reference_fiber_g_per_100g REAL,
+            matched_food TEXT,
+            match_score REAL,
+            match_strength TEXT,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+            FOREIGN KEY (meal_id) REFERENCES meals (id) ON DELETE CASCADE
+        )"""
+    )
+    audit_columns = {row["name"] for row in conn.execute("PRAGMA table_info(automatic_prediction_audits)")}
+    for column, declaration in (
+        ("matched_food", "TEXT"),
+        ("match_score", "REAL"),
+        ("match_strength", "TEXT"),
+    ):
+        if column not in audit_columns:
+            conn.execute(f"ALTER TABLE automatic_prediction_audits ADD COLUMN {column} {declaration}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_automatic_prediction_audits_user_created ON automatic_prediction_audits(user_id, created_at)")
     conn.commit()
     conn.close()
 
@@ -274,6 +296,19 @@ def get_meals_for_date(user_id: int, target_date: str | None = None):
     return [dict(r) for r in rows]
 
 
+def get_manual_meal(user_id: int, meal_id: int):
+    """Return an account-owned, manually entered meal suitable as reference data."""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM meals WHERE id = ? AND user_id = ? AND source = 'manual'",
+            (meal_id, user_id),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def get_daily_totals(user_id: int, target_date: str | None = None):
     meals = get_meals_for_date(user_id, target_date)
     totals = {"calories": 0.0, "protein_g": 0.0, "carbs_g": 0.0, "fat_g": 0.0, "fiber_g": 0.0}
@@ -286,6 +321,10 @@ def get_daily_totals(user_id: int, target_date: str | None = None):
 def delete_meal(user_id: int, meal_id: int) -> bool:
     conn = get_conn()
     try:
+        conn.execute(
+            "UPDATE model_predictions SET matched_meal_id = NULL WHERE user_id = ? AND matched_meal_id = ?",
+            (user_id, meal_id),
+        )
         cursor = conn.execute("DELETE FROM meals WHERE user_id = ? AND id = ?", (user_id, meal_id))
         conn.commit()
         return cursor.rowcount == 1
@@ -293,62 +332,34 @@ def delete_meal(user_id: int, meal_id: int) -> bool:
         conn.close()
 
 
-def add_prediction_check(user_id: int, values: dict) -> int:
-    fields = (
-        "predicted_food", "actual_food", "predicted_calories", "predicted_protein_g",
-        "predicted_carbs_g", "predicted_fat_g", "predicted_fiber_g", "actual_calories",
-        "actual_protein_g", "actual_carbs_g", "actual_fat_g", "actual_fiber_g",
-    )
-    conn = get_conn()
-    try:
-        cursor = conn.execute(
-            f"INSERT INTO prediction_checks (user_id, created_at, {', '.join(fields)}) VALUES (?, ?, {', '.join('?' for _ in fields)})",
-            (user_id, datetime.now(timezone.utc).isoformat(), *(values[field] for field in fields)),
-        )
-        conn.commit()
-        return int(cursor.lastrowid)
-    finally:
-        conn.close()
-
-
-def get_prediction_checks(user_id: int) -> list[dict]:
-    conn = get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM prediction_checks WHERE user_id = ? ORDER BY created_at DESC, id DESC",
-            (user_id,),
-        ).fetchall()
-        return [dict(row) for row in rows]
-    finally:
-        conn.close()
-
-
-def delete_prediction_check(user_id: int, check_id: int) -> bool:
-    conn = get_conn()
-    try:
-        cursor = conn.execute("DELETE FROM prediction_checks WHERE user_id = ? AND id = ?", (user_id, check_id))
-        conn.commit()
-        return cursor.rowcount == 1
-    finally:
-        conn.close()
-
-
-def save_model_predictions(user_id: int, description: str, model: str, predictions: list[dict]) -> list[dict]:
+def save_model_predictions(
+    user_id: int,
+    description: str,
+    model: str,
+    predictions: list[dict],
+    matched_meal_id: int,
+) -> list[dict]:
     """Persist every prediction in a result as one account-owned history row."""
     now = datetime.now(timezone.utc).isoformat()
     conn = get_conn()
     try:
+        meal = conn.execute(
+            "SELECT id, source FROM meals WHERE id = ? AND user_id = ?",
+            (matched_meal_id, user_id),
+        ).fetchone()
+        if not meal or meal["source"] != "manual":
+            raise ValueError("Automatic model comparisons require a manual nutrition entry owned by this account.")
         ids = []
         for prediction in predictions:
             cursor = conn.execute(
                 """INSERT INTO model_predictions (
                     user_id, created_at, description, model, source, predicted_food,
                     predicted_calories, predicted_protein_g, predicted_carbs_g,
-                    predicted_fat_g, predicted_fiber_g
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    predicted_fat_g, predicted_fiber_g, matched_meal_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (user_id, now, description, model, prediction.get("source", "estimated"),
                  prediction["food_name"], prediction["calories"], prediction["protein_g"],
-                 prediction["carbs_g"], prediction["fat_g"], prediction["fiber_g"]),
+                 prediction["carbs_g"], prediction["fat_g"], prediction["fiber_g"], matched_meal_id),
             )
             ids.append(int(cursor.lastrowid))
         conn.commit()
@@ -356,10 +367,16 @@ def save_model_predictions(user_id: int, description: str, model: str, predictio
             return []
         placeholders = ",".join("?" for _ in ids)
         rows = conn.execute(
-            f"SELECT * FROM model_predictions WHERE user_id = ? AND id IN ({placeholders}) ORDER BY id",
+            f"""SELECT p.*, m.id AS linked_meal_id, m.food_name AS linked_food_name,
+                       m.calories AS linked_calories, m.protein_g AS linked_protein_g,
+                       m.carbs_g AS linked_carbs_g, m.fat_g AS linked_fat_g,
+                       m.fiber_g AS linked_fiber_g, m.source AS linked_source
+                FROM model_predictions p
+                LEFT JOIN meals m ON m.id = p.matched_meal_id AND m.user_id = p.user_id
+                WHERE p.user_id = ? AND p.id IN ({placeholders}) ORDER BY p.id""",
             (user_id, *ids),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [_prediction_with_meal(dict(row)) for row in rows]
     except Exception:
         conn.rollback()
         raise
@@ -371,29 +388,34 @@ def get_model_predictions(user_id: int) -> list[dict]:
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT * FROM model_predictions WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+            """SELECT p.*, m.id AS linked_meal_id, m.food_name AS linked_food_name,
+                      m.calories AS linked_calories, m.protein_g AS linked_protein_g,
+                      m.carbs_g AS linked_carbs_g, m.fat_g AS linked_fat_g,
+                      m.fiber_g AS linked_fiber_g, m.source AS linked_source
+               FROM model_predictions p
+               LEFT JOIN meals m ON m.id = p.matched_meal_id AND m.user_id = p.user_id
+               WHERE p.user_id = ? AND p.matched_meal_id IS NOT NULL
+                 AND m.source = 'manual' ORDER BY p.created_at DESC, p.id DESC""",
             (user_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [_prediction_with_meal(dict(row)) for row in rows]
     finally:
         conn.close()
 
 
-def update_model_prediction_actual(user_id: int, prediction_id: int, actual: dict) -> bool:
-    conn = get_conn()
-    try:
-        cursor = conn.execute(
-            """UPDATE model_predictions SET actual_food = ?, actual_calories = ?,
-                actual_protein_g = ?, actual_carbs_g = ?, actual_fat_g = ?, actual_fiber_g = ?
-                WHERE user_id = ? AND id = ?""",
-            (actual["actual_food"], actual["actual_calories"], actual["actual_protein_g"],
-             actual["actual_carbs_g"], actual["actual_fat_g"], actual["actual_fiber_g"],
-             user_id, prediction_id),
-        )
-        conn.commit()
-        return cursor.rowcount == 1
-    finally:
-        conn.close()
+def get_model_prediction_for_meal(user_id: int, meal_id: int) -> dict | None:
+    return next((row for row in get_model_predictions(user_id) if row["matched_meal_id"] == meal_id), None)
+
+
+def _prediction_with_meal(row: dict) -> dict:
+    """Expose actuals only from the linked manual meal, never from typed metric inputs."""
+    meal_id = row.pop("linked_meal_id", None)
+    row.pop("linked_source", None)
+    row["matched_meal_id"] = meal_id
+    row["actual_food"] = row.pop("linked_food_name", None)
+    for key in ("calories", "protein_g", "carbs_g", "fat_g", "fiber_g"):
+        row[f"actual_{key}"] = row.pop(f"linked_{key}", None)
+    return row
 
 
 def delete_model_prediction(user_id: int, prediction_id: int) -> bool:
@@ -410,10 +432,117 @@ def delete_model_prediction(user_id: int, prediction_id: int) -> bool:
 
 
 def get_metric_examples(user_id: int) -> list[dict]:
-    """Combine older saved comparisons and model predictions with actual values."""
-    checks = get_prediction_checks(user_id)
-    model_examples = [
-        row for row in get_model_predictions(user_id)
-        if row["actual_food"] is not None and row["actual_calories"] is not None
-    ]
-    return checks + model_examples
+    """Return only predictions with a USDA record and known serving weight."""
+    return [row for row in get_automatic_prediction_audits(user_id) if row["reference_verified"]]
+
+
+def save_automatic_prediction_audits(user_id: int, description: str, model: str, predictions: list[dict]) -> None:
+    """Save each model output with the USDA evidence available during retrieval."""
+    conn = get_conn()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        for prediction in predictions:
+            meal_id = prediction.get("meal_id")
+            if meal_id is None:
+                continue
+            meal = conn.execute("SELECT id FROM meals WHERE id = ? AND user_id = ?", (meal_id, user_id)).fetchone()
+            if not meal:
+                continue
+            reference = prediction.get("reference") if isinstance(prediction.get("reference"), dict) else {}
+            portion_grams = prediction.get("portion_grams")
+            values = {
+                "calories": reference.get("calories_per_100g"),
+                "protein_g": reference.get("protein_g_per_100g"),
+                "carbs_g": reference.get("carbs_g_per_100g"),
+                "fat_g": reference.get("fat_g_per_100g"),
+                "fiber_g": reference.get("fiber_g_per_100g"),
+            }
+            verified = (
+                prediction.get("source") == "usda"
+                and reference.get("found") is True
+                and reference.get("match_strength") in {"high", "medium"}
+                and isinstance(portion_grams, (int, float))
+                and 0 < float(portion_grams) <= 100000
+                and all(isinstance(value, (int, float)) for value in values.values())
+            )
+            conn.execute(
+                """INSERT INTO automatic_prediction_audits (
+                    user_id, meal_id, created_at, model, description, source, predicted_food,
+                    predicted_calories, predicted_protein_g, predicted_carbs_g, predicted_fat_g,
+                    predicted_fiber_g, portion_grams, reference_food, reference_fdc_id,
+                    reference_calories_per_100g, reference_protein_g_per_100g,
+                    reference_carbs_g_per_100g, reference_fat_g_per_100g, reference_fiber_g_per_100g,
+                    matched_food, match_score, match_strength
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(meal_id) DO UPDATE SET
+                    created_at=excluded.created_at, model=excluded.model, description=excluded.description,
+                    source=excluded.source, predicted_food=excluded.predicted_food,
+                    predicted_calories=excluded.predicted_calories,
+                    predicted_protein_g=excluded.predicted_protein_g,
+                    predicted_carbs_g=excluded.predicted_carbs_g, predicted_fat_g=excluded.predicted_fat_g,
+                    predicted_fiber_g=excluded.predicted_fiber_g, portion_grams=excluded.portion_grams,
+                    reference_food=excluded.reference_food, reference_fdc_id=excluded.reference_fdc_id,
+                    reference_calories_per_100g=excluded.reference_calories_per_100g,
+                    reference_protein_g_per_100g=excluded.reference_protein_g_per_100g,
+                    reference_carbs_g_per_100g=excluded.reference_carbs_g_per_100g,
+                    reference_fat_g_per_100g=excluded.reference_fat_g_per_100g,
+                    reference_fiber_g_per_100g=excluded.reference_fiber_g_per_100g,
+                    matched_food=excluded.matched_food, match_score=excluded.match_score,
+                    match_strength=excluded.match_strength""",
+                (user_id, meal_id, now, model, description, prediction.get("source", "estimated"),
+                 prediction["food_name"], prediction["calories"], prediction["protein_g"],
+                 prediction["carbs_g"], prediction["fat_g"], prediction["fiber_g"],
+                 float(portion_grams) if verified else None,
+                 reference.get("food_name") if verified else None,
+                 str(reference.get("fdc_id")) if verified and reference.get("fdc_id") is not None else None,
+                 *(values[key] if verified else None for key in ("calories", "protein_g", "carbs_g", "fat_g", "fiber_g")),
+                 reference.get("food_name") if reference.get("found") else None,
+                 reference.get("match_score") if reference.get("found") else None,
+                 reference.get("match_strength") if reference.get("found") else None),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_automatic_prediction_audits(user_id: int) -> list[dict]:
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT a.*, m.logged_at FROM automatic_prediction_audits a
+               JOIN meals m ON m.id = a.meal_id AND m.user_id = a.user_id
+               WHERE a.user_id = ? ORDER BY a.created_at DESC, a.id DESC""",
+            (user_id,),
+        ).fetchall()
+        result = []
+        nutrient_keys = ("calories", "protein_g", "carbs_g", "fat_g", "fiber_g")
+        for raw in rows:
+            row = dict(raw)
+            row["reference_verified"] = (
+                row["reference_food"] is not None
+                and row["portion_grams"] is not None
+                and row["match_strength"] in {"high", "medium"}
+            )
+            for nutrient in nutrient_keys:
+                per_100g = row.pop(f"reference_{nutrient}_per_100g")
+                row[f"reference_{nutrient}"] = (
+                    float(per_100g) * float(row["portion_grams"]) / 100
+                    if row["reference_verified"] and per_100g is not None else None
+                )
+            result.append(row)
+        return result
+    finally:
+        conn.close()
+
+
+def delete_automatic_prediction_audit(user_id: int, audit_id: int) -> bool:
+    conn = get_conn()
+    try:
+        cursor = conn.execute("DELETE FROM automatic_prediction_audits WHERE user_id = ? AND id = ?", (user_id, audit_id))
+        conn.commit()
+        return cursor.rowcount == 1
+    finally:
+        conn.close()

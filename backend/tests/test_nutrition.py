@@ -1,6 +1,6 @@
 import unittest
 
-from nutrition import normalize_usda_food
+from nutrition import normalize_usda_food, rank_usda_foods
 
 
 class UsdaUnitNormalizationTests(unittest.TestCase):
@@ -47,6 +47,29 @@ class UsdaUnitNormalizationTests(unittest.TestCase):
             "foodNutrients": [{"nutrientName": "Energy", "unitName": "unknown", "value": 599}],
         })
         self.assertFalse(result["found"])
+
+    def test_usda_candidates_are_reranked_by_food_name_relevance(self):
+        def candidate(name):
+            return {"description": name, "foodNutrients": [
+                {"nutrientName": "Energy", "unitName": "kcal", "value": 50},
+            ]}
+
+        ranked = rank_usda_foods("banana", [candidate("Apple, raw"), candidate("Banana, raw")])
+        self.assertEqual(ranked[0]["food_name"], "Banana, raw")
+        self.assertEqual(ranked[0]["match_strength"], "high")
+        self.assertGreater(ranked[0]["match_score"], ranked[1]["match_score"])
+
+    def test_material_food_mismatch_is_penalized(self):
+        def candidate(name):
+            return {"description": name, "foodNutrients": [
+                {"nutrientName": "Energy", "unitName": "kcal", "value": 250},
+            ]}
+
+        ranked = rank_usda_foods("chicken fry", [
+            candidate("Chicken, meatless, breaded, fried"),
+            candidate("Chicken, broilers, meat and skin, cooked, fried"),
+        ])
+        self.assertEqual(ranked[0]["food_name"], "Chicken, broilers, meat and skin, cooked, fried")
 
 
 if __name__ == "__main__":

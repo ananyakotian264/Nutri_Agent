@@ -9,7 +9,7 @@ import db
 
 class SessionTests(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_dir = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
         self.old_db_path = db.DB_PATH
         db.DB_PATH = Path(self.temp_dir.name) / "test.sqlite3"
         db.init_db()
